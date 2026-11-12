@@ -52,52 +52,60 @@ if (orderForm) {
     sendOrder({ name, meal, message });
   });
 
-  function sendOrder(order) {
+  async function sendOrder(order) {
     setLoading(true);
+    hideFallback();
     showStatus("Sending your order…", "");
 
-    // FormSubmit.co delivers this straight to the restaurant's inbox —
-    // no backend server or API key needed. The first time an order is
-    // sent, FormSubmit emails RESTAURANT_EMAIL a one-time confirmation
-    // link; after that link is clicked, every future order is delivered
-    // automatically.
-    fetch(`https://formsubmit.co/ajax/${RESTAURANT_EMAIL}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({
-        name: order.name,
-        meal: order.meal,
-        message: order.message,
-        _subject: `New ${order.meal} order from ${order.name}`,
-        _captcha: "false",
-      }),
-    })
-      .then((response) => {
-        if (!response.ok) throw new Error("Request failed");
-        return response.json();
-      })
-      .then(() => {
-        showStatus(
-          `Thanks, ${order.name}! Your ${order.meal.toLowerCase()} order is on its way to our kitchen.`,
-          "success"
-        );
-        orderForm.reset();
-        hideFallback();
-      })
-      .catch(() => {
-        // If the request can't reach FormSubmit (offline, blocked, not yet
-        // confirmed, etc.) fall back to opening the visitor's own email app
-        // with everything pre-filled, addressed to the restaurant.
-        showStatus(
-          "We couldn't send that automatically. Use the button below to email it instead.",
-          "error"
-        );
-        showFallback(order);
-      })
-      .finally(() => setLoading(false));
+    // FormSubmit.co requires the recipient to confirm the address the first
+    // time it receives a submission. A successful HTTP response alone does
+    // not guarantee that the order was accepted, so check the JSON result too.
+    try {
+      const response = await fetch(`https://formsubmit.co/ajax/${RESTAURANT_EMAIL}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          name: order.name,
+          meal: order.meal,
+          message: order.message,
+          _subject: `New ${order.meal} order from ${order.name}`,
+          _captcha: "false",
+        }),
+      });
+
+      let result;
+      try {
+        result = await response.json();
+      } catch {
+        throw new Error("The email service returned an unexpected response.");
+      }
+
+      // FormSubmit returns success as the string "true". Treat a non-2xx
+      // response or any other success value as a failed submission.
+      if (!response.ok || String(result.success).toLowerCase() !== "true") {
+        throw new Error(result.message || "The email service could not accept your order.");
+      }
+
+      showStatus(
+        `Thanks, ${order.name}! Your ${order.meal.toLowerCase()} order was accepted for delivery to our kitchen.`,
+        "success"
+      );
+      orderForm.reset();
+    } catch (error) {
+      // If the request fails (offline, blocked, unconfirmed address, or a
+      // rejected FormSubmit response), offer a mailto fallback and never show
+      // the success message.
+      showStatus(
+        `${error.message || "We couldn't send that automatically."} Use the link below to email it instead.`,
+        "error"
+      );
+      showFallback(order);
+    } finally {
+      setLoading(false);
+    }
   }
 
   function showStatus(text, type) {
